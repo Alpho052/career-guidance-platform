@@ -1,7 +1,7 @@
-// utils/sendVerificationEmail.js
+// utils/emailservices.js
 const sgMail = require('@sendgrid/mail');
 
-// Set your SendGrid API key in environment variables
+// Set your SendGrid API key from environment variables
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 const sendVerificationEmail = async (email, verificationCode) => {
