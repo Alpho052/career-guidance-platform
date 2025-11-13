@@ -83,6 +83,196 @@ const studentQualifiesForJob = (job, profile) => {
   };
 };
 
+// ---------- Get student profile ----------
+const getStudentProfile = async (req, res) => {
+  try {
+    const studentId = req.user.id;
+
+    const studentDoc = await db.collection('students').doc(studentId).get();
+    if (!studentDoc.exists) {
+      return res.status(404).json({ success: false, error: 'Student profile not found' });
+    }
+    const student = studentDoc.data();
+
+    // Get applications
+    const applicationsSnapshot = await db.collection('applications')
+      .where('studentId', '==', studentId)
+      .get();
+
+    const applications = [];
+    applicationsSnapshot.forEach(doc => applications.push({ id: doc.id, ...doc.data() }));
+
+    // Get grades and calculate GPA
+    const gradesSnapshot = await db.collection('grades')
+      .where('studentId', '==', studentId)
+      .get();
+
+    const grades = [];
+    gradesSnapshot.forEach(doc => grades.push({ id: doc.id, ...doc.data() }));
+
+    const gpa = calculateGPA(grades);
+
+    res.json({
+      success: true,
+      student: { ...student, gpa, applicationCount: applications.length },
+      applications,
+      grades
+    });
+  } catch (error) {
+    console.error('❌ Get student profile error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// ---------- Get institution courses (filtered for student qualifications) ----------
+const getInstitutionCourses = async (req, res) => {
+  try {
+    const studentId = req.user.id;
+    const { institutionId } = req.params;
+
+    if (!institutionId) {
+      return res.status(400).json({ success: false, error: 'Institution ID is required' });
+    }
+
+    const coursesSnapshot = await db.collection('courses')
+      .where('institutionId', '==', institutionId)
+      .get();
+
+    let courses = [];
+    coursesSnapshot.forEach(doc => courses.push({ id: doc.id, ...doc.data() }));
+
+    if (studentId) {
+      // Fetch student grades
+      const gradesSnapshot = await db.collection('grades')
+        .where('studentId', '==', studentId)
+        .get();
+      const studentGrades = [];
+      gradesSnapshot.forEach(doc => studentGrades.push(doc.data()));
+
+      const numericGpa = studentGrades.length > 0
+        ? Number(((studentGrades.reduce((s, g) => {
+            const percentage = g.grade || 0;
+            return s + ((percentage / 100) * 4);
+          }, 0)) / studentGrades.length).toFixed(2))
+        : 0;
+
+      // Filter courses based on GPA & required subjects
+      courses = courses.filter(course => {
+        const reqs = course.requirements || {};
+
+        if (reqs.minGPA && numericGpa < Number(reqs.minGPA)) return false;
+
+        if (Array.isArray(reqs.requiredSubjects) && reqs.requiredSubjects.length > 0) {
+          const minGrade = Number(reqs.minSubjectGrade || 0);
+          for (const subj of reqs.requiredSubjects) {
+            const found = studentGrades.find(g => (g.subject || '').toLowerCase() === String(subj).toLowerCase());
+            if (!found || Number(found.grade || 0) < minGrade) return false;
+          }
+        }
+        return true;
+      });
+    }
+
+    res.json({ success: true, data: courses });
+  } catch (error) {
+    console.error('❌ Get institution courses error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+};
+
+module.exports = {
+  getStudentProfile,
+  getInstitutionCourses,
+};
+/*const { db } = require('../config/firebase');
+const { calculateGPA, convertFirestoreDoc } = require('../utils/helpers');
+
+const timestampToMillis = (value) => {
+  if (!value) return 0;
+  if (value.toMillis) return value.toMillis();
+  if (value._seconds !== undefined) {
+    return value._seconds * 1000 + (value._nanoseconds || 0) / 1e6;
+  }
+  if (value.seconds !== undefined) {
+    return value.seconds * 1000 + (value.nanoseconds || 0) / 1e6;
+  }
+  if (value instanceof Date) return value.getTime();
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
+
+const buildStudentJobMatchProfile = async (studentId, studentData) => {
+  const gpa = studentData.gpa ? Number(studentData.gpa) : 0;
+  const experience = Array.isArray(studentData.experience) ? studentData.experience : [];
+  const totalExperienceYears = experience.reduce((sum, exp) => sum + (Number(exp.years) || 0), 0);
+
+  const skillsText = [
+    studentData.skills || '',
+    ...experience.map(exp => `${exp.role || ''} ${exp.description || ''}`)
+  ].join(' ').toLowerCase();
+
+  const documentsSnapshot = await db.collection('studentDocuments')
+    .where('studentId', '==', studentId)
+    .get();
+
+  const certificates = [];
+  documentsSnapshot.forEach(doc => {
+    const data = doc.data();
+    if (['certificate', 'diploma'].includes((data.documentType || '').toLowerCase())) {
+      certificates.push({
+        id: doc.id,
+        fileName: data.fileName || '',
+        documentType: data.documentType || ''
+      });
+    }
+  });
+
+  const certificateNamesLower = certificates.map(cert => cert.fileName.toLowerCase());
+
+  return {
+    gpa,
+    experience,
+    totalExperienceYears,
+    skillsText,
+    certificates,
+    certificateNamesLower
+  };
+};
+
+const studentQualifiesForJob = (job, profile) => {
+  const jobMinGPA = job.minGPA ? Number(job.minGPA) : 0;
+  const meetsGPA = !jobMinGPA || profile.gpa >= jobMinGPA;
+
+  const jobMinExperience = job.minExperienceYears ? Number(job.minExperienceYears) : 0;
+  const meetsExperience = !jobMinExperience || profile.totalExperienceYears >= jobMinExperience;
+
+  const requiredCertificates = Array.isArray(job.requirements?.requiredCertificates)
+    ? job.requirements.requiredCertificates.map(cert => cert.toLowerCase())
+    : [];
+  const meetsCertificates = requiredCertificates.length === 0 || requiredCertificates.every(required =>
+    profile.certificateNamesLower.some(name => name.includes(required))
+  );
+
+  const jobKeywords = Array.isArray(job.requirements?.keywords)
+    ? job.requirements.keywords.map(keyword => keyword.toLowerCase())
+    : [];
+  const matchesKeywords = jobKeywords.length === 0 || jobKeywords.every(keyword => profile.skillsText.includes(keyword));
+
+  return {
+    qualifies: meetsGPA && meetsExperience && meetsCertificates && matchesKeywords,
+    details: {
+      meetsGPA,
+      meetsExperience,
+      meetsCertificates,
+      matchesKeywords
+    }
+  };
+};
+
 // Get student profile
 const getStudentProfile = async (req, res) => {
   try {
@@ -942,4 +1132,4 @@ module.exports = {
   getNotifications,
   markNotificationRead,
   createJobNotification
-};
+};*/
