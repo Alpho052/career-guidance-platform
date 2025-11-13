@@ -1,70 +1,40 @@
-const nodemailer = require('nodemailer');
+// utils/sendVerificationEmail.js
+const sgMail = require('@sendgrid/mail');
 
-// Mock email service for development
-let emailEnabled = false;
-let transporter = null;
+// Set your SendGrid API key in environment variables
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
-// Only initialize email if credentials are provided
-if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
-  try {
-    transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
-      }
-    });
-    emailEnabled = true;
-    console.log('✅ Email service configured');
-  } catch (error) {
-    console.log('⚠️ Email service configuration failed');
-  }
-} else {
-  console.log('📧 Email service disabled - running in development mode');
-}
-
-// Send verification email
 const sendVerificationEmail = async (email, verificationCode) => {
-  console.log(`📧 Verification code for ${email}: ${verificationCode}`);
-  
-  if (!emailEnabled || !transporter) {
-    console.log(`🔑 Development mode - Use this code to verify: ${verificationCode}`);
-    return true;
-  }
+  console.log(`📧 Sending verification code to ${email}...`);
+
+  // Construct the email
+  const msg = {
+    to: email,
+    from: 'no-reply@careerplatform.com', // must be verified in SendGrid
+    subject: 'Verify Your Email - Career Platform Lesotho',
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
+        <h2 style="color: #2c5aa0;">Verify Your Email</h2>
+        <p>Thank you for joining <strong>Career Platform Lesotho</strong>!</p>
+        <p>Your verification code is:</p>
+        <div style="text-align:center;margin:30px 0;">
+          <span style="font-size:32px;font-weight:bold;color:#2c5aa0;">${verificationCode}</span>
+        </div>
+        <p>Please enter this code on the website to verify your account.</p>
+        <br>
+        <p>Best regards,<br><strong>Career Platform Team</strong></p>
+      </div>
+    `,
+  };
 
   try {
-    const mailOptions = {
-      from: `"Career Platform" <${process.env.EMAIL_USER}>`,
-      to: email,
-      subject: 'Email Verification - Career Platform Lesotho',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-          <h2 style="color: #2c5aa0; text-align: center;">Email Verification</h2>
-          <p>Hello,</p>
-          <p>Thank you for registering with <strong>Career Platform Lesotho</strong>!</p>
-          <p>Your verification code is:</p>
-          <div style="text-align: center; margin: 30px 0;">
-            <span style="font-size: 32px; font-weight: bold; color: #2c5aa0; letter-spacing: 5px;">
-              ${verificationCode}
-            </span>
-          </div>
-          <p>Enter this code on the verification page to complete your registration.</p>
-          <p style="color: #666; font-size: 14px;">This code will expire in 24 hours.</p>
-          <br>
-          <p>Best regards,<br><strong>Career Platform Team</strong></p>
-        </div>
-      `
-    };
-
-    await transporter.sendMail(mailOptions);
-    console.log(`✅ Verification email sent to: ${email}`);
+    await sgMail.send(msg);
+    console.log(`✅ Verification email sent successfully to ${email}`);
     return true;
   } catch (error) {
-    console.log(`⚠️ Email sending failed - use this code: ${verificationCode}`);
-    return true; // Don't fail registration because of email
+    console.error(`❌ Failed to send verification email to ${email}:`, error.response?.body || error.message);
+    return false; // Don't fail registration if email fails
   }
 };
 
-module.exports = { 
-  sendVerificationEmail
-};
+module.exports = { sendVerificationEmail };
