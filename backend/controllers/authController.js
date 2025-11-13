@@ -431,26 +431,24 @@ module.exports = {
   getProfile,
   devVerify 
 };*/
+// controllers/authController.js
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { db, auth } = require('../config/firebase');
 const { sendVerificationEmail } = require('../utils/emailService');
 const { generateVerificationCode } = require('../utils/helpers');
 
-// User registration
+// -----------------------------
+// User Registration
+// -----------------------------
 const register = async (req, res) => {
   try {
     const { email, password, name, role, additionalData } = req.body;
 
-    console.log(`📝 Registration attempt: ${email} as ${role}`);
-
     // Check if user already exists
     const existingUser = await db.collection('users').where('email', '==', email).get();
     if (!existingUser.empty) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'User already exists with this email' 
-      });
+      return res.status(400).json({ success: false, error: 'User already exists with this email' });
     }
 
     // Hash password
@@ -459,29 +457,15 @@ const register = async (req, res) => {
     // Generate verification code
     const verificationCode = generateVerificationCode();
 
-    let userRecord;
-    try {
-      // Create user in Firebase Auth
-      userRecord = await auth.createUser({
-        email,
-        password: hashedPassword,
-        displayName: name,
-        emailVerified: false
-      });
-    } catch (firebaseError) {
-      console.error('❌ Firebase Auth creation error:', firebaseError);
-      
-      if (firebaseError.code === 'auth/email-already-exists') {
-        return res.status(400).json({ 
-          success: false,
-          error: 'User already exists with this email' 
-        });
-      }
-      
-      throw firebaseError;
-    }
+    // Create user in Firebase Auth
+    const userRecord = await auth.createUser({
+      email,
+      password: hashedPassword,
+      displayName: name,
+      emailVerified: false,
+    });
 
-    // Create user document in Firestore
+    // Create Firestore user document
     const userData = {
       uid: userRecord.uid,
       email,
@@ -493,25 +477,23 @@ const register = async (req, res) => {
       createdAt: new Date(),
       updatedAt: new Date(),
       status: 'active',
-      ...additionalData
+      ...additionalData,
     };
 
     await db.collection('users').doc(userRecord.uid).set(userData);
 
-    // Create role-specific document (except for admin)
+    // Create role-specific document (except admin)
     if (role !== 'admin') {
+      const collectionName = role === 'company' ? 'companies' : `${role}s`;
       const roleData = {
         uid: userRecord.uid,
         email,
         name,
         createdAt: new Date(),
         updatedAt: new Date(),
-        // Immediately approve all roles
         status: 'approved',
-        ...additionalData
+        ...additionalData,
       };
-
-      const collectionName = role === 'company' ? 'companies' : `${role}s`;
       await db.collection(collectionName).doc(userRecord.uid).set(roleData);
     }
 
@@ -519,64 +501,122 @@ const register = async (req, res) => {
     let emailSent = false;
     try {
       emailSent = await sendVerificationEmail(email, verificationCode);
-    } catch (emailError) {
-      console.log('⚠️ Email sending failed, but registration continues');
-      // Don't throw error - registration should succeed even if email fails
+    } catch (err) {
+      console.warn('⚠️ Email sending failed:', err.message);
     }
 
-    // Generate JWT token
-    const token = jwt.sign(
-      { 
-        userId: userRecord.uid, 
-        role: role,
-        email: email
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: '24h' }
-    );
-
-    console.log(`✅ User registered successfully: ${email}`);
-    console.log(`📧 Verification code: ${verificationCode}`);
+    // Generate JWT
+    const token = jwt.sign({ userId: userRecord.uid, email, role }, process.env.JWT_SECRET, { expiresIn: '24h' });
 
     res.status(201).json({
       success: true,
       message: 'User registered successfully. Please verify your email.',
       token,
-      user: {
-        id: userRecord.uid,
-        email,
-        name,
-        role,
-        isVerified: false
-      },
+      user: { id: userRecord.uid, email, name, role, isVerified: false },
       verificationCode,
-      emailSent
+      emailSent,
     });
-
   } catch (error) {
     console.error('❌ Registration error:', error);
-    
-    // Provide more specific error messages
-    let errorMessage = 'Internal server error during registration';
-    let statusCode = 500;
-
-    if (error.code === 'auth/invalid-email') {
-      errorMessage = 'Invalid email address';
-      statusCode = 400;
-    } else if (error.code === 'auth/weak-password') {
-      errorMessage = 'Password is too weak';
-      statusCode = 400;
-    } else if (error.code === 'auth/operation-not-allowed') {
-      errorMessage = 'Email/password accounts are not enabled';
-      statusCode = 400;
-    }
-
-    res.status(statusCode).json({ 
-      success: false,
-      error: errorMessage,
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 };
 
-module.exports = { register };
+// -----------------------------
+// User Login
+// -----------------------------
+const login = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    const userQuery = await db.collection('users').where('email', '==', email).get();
+    if (userQuery.empty) {
+      return res.status(400).json({ success: false, error: 'Invalid email or password' });
+    }
+
+    const user = userQuery.docs[0].data();
+
+    // Check password
+    const validPassword = await bcrypt.compare(password, user.password);
+    if (!validPassword) {
+      return res.status(400).json({ success: false, error: 'Invalid email or password' });
+    }
+
+    // Generate JWT
+    const token = jwt.sign({ userId: user.uid, email: user.email, role: user.role }, process.env.JWT_SECRET, { expiresIn: '24h' });
+
+    res.json({
+      success: true,
+      message: 'Login successful',
+      token,
+      user: { id: user.uid, email: user.email, name: user.name, role: user.role, isVerified: user.isVerified },
+    });
+  } catch (error) {
+    console.error('❌ Login error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// -----------------------------
+// Email Verification
+// -----------------------------
+const verifyEmail = async (req, res) => {
+  try {
+    const { email, verificationCode } = req.body;
+
+    const userQuery = await db.collection('users').where('email', '==', email).get();
+    if (userQuery.empty) {
+      return res.status(400).json({ success: false, error: 'User not found' });
+    }
+
+    const userDoc = userQuery.docs[0];
+    const user = userDoc.data();
+
+    if (user.isVerified) {
+      return res.json({ success: true, message: 'Email already verified' });
+    }
+
+    if (user.verificationCode !== verificationCode) {
+      return res.status(400).json({ success: false, error: 'Invalid verification code' });
+    }
+
+    // Update verification status
+    await db.collection('users').doc(user.uid).update({
+      isVerified: true,
+      verificationCode: null,
+      updatedAt: new Date(),
+    });
+
+    res.json({ success: true, message: 'Email verified successfully', user: { id: user.uid, email: user.email, role: user.role } });
+  } catch (error) {
+    console.error('❌ Verification error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// -----------------------------
+// Get User Profile
+// -----------------------------
+const getProfile = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userDoc.exists) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    const user = userDoc.data();
+    res.json({ success: true, user: { id: user.uid, email: user.email, name: user.name, role: user.role, isVerified: user.isVerified } });
+  } catch (error) {
+    console.error('❌ Get profile error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+module.exports = {
+  register,
+  login,
+  verifyEmail,
+  getProfile,
+};
