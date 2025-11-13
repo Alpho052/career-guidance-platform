@@ -56,7 +56,7 @@ const buildStudentJobMatchProfile = async (studentId, studentData) => {
   };
 };
 
-/* ---------- Helper: Qualification Check ---------- */
+/* ---------- Helper: Job Qualification Check ---------- */
 const studentQualifiesForJob = (job, profile) => {
   const jobMinGPA = job.minGPA ? Number(job.minGPA) : 0;
   const meetsGPA = !jobMinGPA || profile.gpa >= jobMinGPA;
@@ -87,7 +87,7 @@ const studentQualifiesForJob = (job, profile) => {
   };
 };
 
-/* ---------- Real Implementations ---------- */
+/* ---------- REAL IMPLEMENTATIONS ---------- */
 
 // ✅ Get Student Profile
 const getStudentProfile = async (req, res) => {
@@ -131,15 +131,17 @@ const getStudentProfile = async (req, res) => {
   }
 };
 
-// ✅ Get Institution Courses
+// ✅ Get Institution Courses — only qualified courses are shown
 const getInstitutionCourses = async (req, res) => {
   try {
     const studentId = req.user.id;
     const { institutionId } = req.params;
+
     if (!institutionId) {
       return res.status(400).json({ success: false, error: 'Institution ID is required' });
     }
 
+    // Fetch all courses from this institution
     const coursesSnapshot = await db.collection('courses')
       .where('institutionId', '==', institutionId)
       .get();
@@ -147,41 +149,47 @@ const getInstitutionCourses = async (req, res) => {
     let courses = [];
     coursesSnapshot.forEach(doc => courses.push({ id: doc.id, ...doc.data() }));
 
-    if (studentId) {
-      const gradesSnapshot = await db.collection('grades')
-        .where('studentId', '==', studentId)
-        .get();
-      const studentGrades = [];
-      gradesSnapshot.forEach(doc => studentGrades.push(doc.data()));
+    // Fetch student grades
+    const gradesSnapshot = await db.collection('grades')
+      .where('studentId', '==', studentId)
+      .get();
 
-      const numericGpa =
-        studentGrades.length > 0
-          ? Number(
-              (
-                studentGrades.reduce((s, g) => {
-                  const percentage = g.grade || 0;
-                  return s + (percentage / 100) * 4;
-                }, 0) / studentGrades.length
-              ).toFixed(2)
-            )
-          : 0;
+    const studentGrades = [];
+    gradesSnapshot.forEach(doc => studentGrades.push(doc.data()));
 
-      courses = courses.filter(course => {
-        const reqs = course.requirements || {};
-        if (reqs.minGPA && numericGpa < Number(reqs.minGPA)) return false;
+    // Calculate GPA (4.0 scale)
+    const numericGpa =
+      studentGrades.length > 0
+        ? Number(
+            (
+              studentGrades.reduce((sum, g) => {
+                const percentage = g.grade || 0;
+                return sum + (percentage / 100) * 4;
+              }, 0) / studentGrades.length
+            ).toFixed(2)
+          )
+        : 0;
 
-        if (Array.isArray(reqs.requiredSubjects) && reqs.requiredSubjects.length > 0) {
-          const minGrade = Number(reqs.minSubjectGrade || 0);
-          for (const subj of reqs.requiredSubjects) {
-            const found = studentGrades.find(
-              g => (g.subject || '').toLowerCase() === String(subj).toLowerCase()
-            );
-            if (!found || Number(found.grade || 0) < minGrade) return false;
-          }
+    // Filter only qualified courses
+    courses = courses.filter(course => {
+      const reqs = course.requirements || {};
+
+      // GPA filter
+      if (reqs.minGPA && numericGpa < Number(reqs.minGPA)) return false;
+
+      // Subject filters
+      if (Array.isArray(reqs.requiredSubjects) && reqs.requiredSubjects.length > 0) {
+        const minGrade = Number(reqs.minSubjectGrade || 0);
+        for (const subj of reqs.requiredSubjects) {
+          const found = studentGrades.find(
+            g => (g.subject || '').toLowerCase() === String(subj).toLowerCase()
+          );
+          if (!found || Number(found.grade || 0) < minGrade) return false;
         }
-        return true;
-      });
-    }
+      }
+
+      return true; // qualified
+    });
 
     res.json({ success: true, data: courses });
   } catch (error) {
@@ -190,7 +198,7 @@ const getInstitutionCourses = async (req, res) => {
   }
 };
 
-/* ---------- Placeholder Routes (no crash, safe deploy) ---------- */
+/* ---------- PLACEHOLDER ROUTES (safe deployment) ---------- */
 
 // Profile
 const updateStudentProfile = async (req, res) => {
@@ -249,7 +257,7 @@ const markNotificationRead = async (req, res) => {
   res.json({ success: true, message: 'markNotificationRead placeholder' });
 };
 
-/* ---------- Export All ---------- */
+/* ---------- EXPORT ALL ---------- */
 module.exports = {
   getStudentProfile,
   getInstitutionCourses,
