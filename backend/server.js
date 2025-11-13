@@ -12,7 +12,8 @@ app.use(express.json());
 
 // Import routes
 const authRoutes = require('./routes/auth');
-const studentRoutes = require('./routes/students');
+const studentRoutes = require('./routes/studentRoutes'); // ✅ matches updated router
+
 const institutionRoutes = require('./routes/institutions');
 const companyRoutes = require('./routes/companies');
 const adminRoutes = require('./routes/admin');
